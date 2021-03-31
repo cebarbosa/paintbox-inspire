@@ -1,5 +1,7 @@
 """
-Prepare templates for use with paintbox
+Prepare templates for use with paintbox. These models have lower resolution
+in relation to CvD models, but the python-FSPS package provides a simple way
+to calculate the M/L of the models.
 """
 import os
 import itertools
@@ -7,14 +9,9 @@ import itertools
 import numpy as np
 import astropy.units as u
 import astropy.constants as const
-from astropy.table import Table, hstack, vstack
+from astropy.table import Table, hstack
 from astropy.io import fits
-import ppxf.ppxf_util as util
 from tqdm import tqdm
-from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
-
-from spectres import spectres
 
 import context
 import fsps
@@ -87,62 +84,7 @@ def make_FSPS_varydoublex(outdir, redo=False):
         hdulist = fits.HDUList([hdu1, hdu2, hdu3])
         hdulist.writeto(output, overwrite=True)
 
-def prepare_CvD_templates(wave, output, redo=False):
-    """ Use FSPS models to prepare templates for a given instrumental setup. """
-    if os.path.exists(output) and not redo:
-        return
-    global FSPS_dir
-    filenames = os.listdir(FSPS_dir)
-    Zs = np.sort(list(set(
-                 [float(_.split("_")[2].replace(
-                  "Zm", "-").replace( "Zp", "+")) for _ in filenames])))
-    imfs = np.sort(list(set([float(_.split("_")[3].replace(
-                   "imf1p", "+")) for _ in filenames])))
-    pars = np.array(np.meshgrid(Zs, imfs, imfs, indexing='ij')).reshape(3, -1).T
-    specs, outtab = [], []
-    for j, (Z, imf1, imf2) in enumerate(tqdm(pars)):
-        zname = "{:+.2f}".format(Z).replace("+", "p").replace("-", "m")
-        x1name = "{:+.2f}".format(imf1).replace("+", "p").replace("-", "m")
-        x2name = "{:+.2f}".format(imf2).replace("+", "p").replace("-", "m")
-        fname = "FSPS_varydoublex_Z{}_imf1{}_imf2{}.fits".format(zname, x1name,
-                                                           x2name)
-        data = fits.getdata(os.path.join(FSPS_dir, fname))
-        wmodel = Table.read(os.path.join(FSPS_dir, fname), hdu=2)["wave"].data
-        outspecs = np.zeros((len(data), len(wave)))
-        for i, spec in enumerate(data):
-            outspecs[i] = interp1d(wmodel, spec)(wave)
-        table = Table.read(os.path.join(FSPS_dir, fname), hdu=1)
-        if j == 0:
-            specs = outspecs
-            outtab = table
-        else:
-            specs = np.vstack([specs, outspecs])
-            outtab = vstack([outtab, table])
-    flam_unit = u.erg / u.cm / u.cm / u.s / u.AA
-    # Saving results in output
-    hdu1 = fits.PrimaryHDU(specs)
-    hdu1.header["EXTNAME"] = "SSPS"
-    hdu1.header["BUNIT"] = ("{}".format(flam_unit),
-                            "Physical units of the array values")
-    hdu2 = fits.BinTableHDU(outtab)
-    hdu2.header["EXTNAME"] = "PARAMS"
-    # Making wavelength array
-    hdu3 = fits.BinTableHDU(Table([wave], names=["wave"]))
-    hdu3.header["EXTNAME"] = "WAVE"
-    hdulist = fits.HDUList([hdu1, hdu2, hdu3])
-    hdulist.writeto(output, overwrite=True)
-
-def prepare_models_wifis(w1=8600, w2=13200, velscale=200):
-    logLam, velscale = util.log_rebin([w1, w2], np.ones(10000),
-                                               velscale=velscale)[1:]
-    wave = np.exp(logLam) * u.AA
-    output = "/home/kadu/Dropbox/SPINS/fsps_wifis.fits"
-    prepare_CvD_templates(wave, output, redo=False)
 
 if __name__ == "__main__":
     FSPS_dir = "/home/kadu/Dropbox/FSPS/varydoublex"
-    run_FSPS = False
-    if run_FSPS:
-        outdir = FSPS_dir
-        make_FSPS_varydoublex(outdir, redo=True)
-    prepare_models_wifis()
+    make_FSPS_varydoublex(FSPS_dir, redo=False)
