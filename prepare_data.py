@@ -3,6 +3,7 @@ Prepare data for fitting with paintbox.
 """
 
 import os
+import copy
 
 import numpy as np
 import astropy.units as u
@@ -12,15 +13,15 @@ from astropy.table import Table
 import matplotlib.pyplot as plt
 from specutils import Spectrum1D
 from scipy.ndimage.filters import gaussian_filter1d
-from ppxf.ppxf_util import log_rebin
 from spectres import spectres
+from paintbox.utils.disp2vel import disp2vel
 
 import context
 
 if __name__ == "__main__":
     sample = "test"
     data_dir = os.path.join(context.data_dir, sample)
-    galaxies = os.listdir(data_dir)
+    galaxies = sorted(os.listdir(data_dir))
     wranges = ["UVB", "VIS", "NIR"]
     R = [3300, 5400, 3500]
     target_sigma = 300
@@ -28,6 +29,12 @@ if __name__ == "__main__":
     c = const.c.to("km/s").value
     for galaxy in galaxies:
         wdir = os.path.join(data_dir, galaxy)
+        maskfile = os.path.join(wdir, "mranges.txt")
+        mwave, marm = [], []
+        if os.path.exists(maskfile):
+            mwave = np.atleast_2d(np.loadtxt(maskfile, usecols=(0,1)))
+            marm = np.atleast_1d(np.loadtxt(maskfile, usecols=(2,),
+                                            dtype=np.str))
         output = os.path.join(wdir, "{}_sig{}.fits".format(galaxy,
                                                                target_sigma))
         hdulist = [fits.PrimaryHDU()]
@@ -49,18 +56,32 @@ if __name__ == "__main__":
             err_target_sigma = gaussian_filter1d(err1d.flux,
                                                     kernel_sigma.value,
                                                     mode="constant", cval=0.0)
-            logwave = log_rebin([wave[0], wave[-1]],
-                                spec_target_sigma, velscale=outvelscale)[1]
-            owave = np.exp(logwave)[1:-1]
+            owave = disp2vel(wave, velscale)
+            # Mask out bad regions
+            goodpix = np.full(len(owave), True)
+            for j, (w0, w1) in enumerate(mwave):
+                if marm[j] != wr:
+                    continue
+                idx = np.where((owave >= w0) & (owave <= w1))
+                goodpix[idx] = False
             ospec, ospecerr = spectres(owave, wave, spec_target_sigma,
                                        spec_errs=err_target_sigma)
             plt.plot(wave, spec1d.flux, ls="--", c="0.9")
-            plt.plot(owave, ospec, c="C{}".format(i), label=wranges[i])
-            plt.plot(owave, ospec + ospecerr, c="C{}".format(i), ls="--")
-            plt.plot(owave, ospec - ospecerr, c="C{}".format(i), ls="--")
+            y = copy.copy(ospec)
+            y[~goodpix] = np.nan
+            plt.plot(owave, y, c="C{}".format(i),
+                     label=wranges[i])
+            plt.plot(owave, y + ospecerr, c="C{}".format(i), ls="--")
+            plt.plot(owave, y - ospecerr, c="C{}".format(i), ls="--")
+            mask = np.where(goodpix, 0, 1)
             t = Table([owave * u.Angstrom, ospec * context.flam_unit,
-                       ospecerr * context.flam_unit],
-                      names=["wave", "flam", "flamerr"])
+                       ospecerr * context.flam_unit, mask],
+                      names=["wave", "flam", "flamerr", "mask"])
+            # Crop borders
+            w1 = t["wave"].data[t["mask"] == 0][0]
+            w2 = t["wave"].data[t["mask"] == 0][-1]
+            t = t[t["wave"] >= w1]
+            t = t[t["wave"] <= w2]
             hdu = fits.BinTableHDU(t)
             hdu.header["EXTNAME"] = (wranges[i], "Xshooter arm")
             hdulist.append(hdu)
