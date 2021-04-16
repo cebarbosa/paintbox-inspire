@@ -3,7 +3,7 @@ import os
 import glob
 import shutil
 
-from astropy.table import Table
+from astropy.table import Table, vstack
 import numpy as np
 from scipy import stats
 import paintbox as pb
@@ -63,7 +63,7 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
             return -np.inf
         ll = loglike(theta)
         if not np.isfinite(ll):
-            print("nu={}".format(theta[loglike.parnames.index("nu")]), ll)
+            # print("nu={}".format(theta[loglike.parnames.index("nu")]), ll)
             return -np.inf
         return lp + ll
     backend = emcee.backends.HDFBackend(outdb)
@@ -73,7 +73,26 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
     sampler.run_mcmc(pos, nsteps, progress=True)
     return
 
-def run_testdata(sigma=300, elements=None, nsteps=5000):
+def make_table(trace, outtab):
+    data = np.array([trace[p].data for p in trace.colnames]).T
+    v = np.percentile(data, 50, axis=0)
+    vmax = np.percentile(data, 84, axis=0)
+    vmin = np.percentile(data, 16, axis=0)
+    vuerr = vmax - v
+    vlerr = v - vmin
+    tab = []
+    for i, param in enumerate(trace.colnames):
+        t = Table()
+        t["param"] = [param]
+        t["median"] = [round(v[i], 5)]
+        t["lerr".format(param)] = [round(vlerr[i], 5)]
+        t["uerr".format(param)] = [round(vuerr[i], 5)]
+        tab.append(t)
+    tab = vstack(tab)
+    tab.write(outtab, overwrite=True)
+    return tab
+
+def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
     """ Run paintbox on test galaxies. """
     elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
                 "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu"] if \
@@ -141,9 +160,19 @@ def run_testdata(sigma=300, elements=None, nsteps=5000):
         if os.path.exists(tmp_db):
             os.remove(tmp_db)
         outdb = os.path.join(gal_dir, dbname)
-        if not os.path.exists(outdb):
-            run_sampler(logps[0], priors, tmp_db, nsteps=nsteps)
+        if not os.path.exists(outdb) or redo:
+            run_sampler(logp, priors, tmp_db, nsteps=nsteps)
             shutil.move(tmp_db, outdb)
+        # Load database and make a table with summary statistics
+        reader = emcee.backends.HDFBackend(outdb)
+        tracedata = reader.get_chain(discard=int(0.9 * nsteps),
+                                     thin=100, flat=True)
+        print(tracedata.shape)
+        print(len(logp.parnames))
+        input()
+        trace = Table(tracedata, names=logp.parnames)
+        outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
+        make_table(trace, outtab)
 
 if __name__ == "__main__":
-    run_testdata()
+    run_testdata(redo=True, nsteps=10)
