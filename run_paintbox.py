@@ -2,6 +2,7 @@
 import os
 import glob
 import shutil
+import pickle
 
 from astropy.table import Table, vstack
 import astropy.constants as const
@@ -11,6 +12,7 @@ import paintbox as pb
 from paintbox.utils import CvD18
 from paintbox.utils.disp2vel import disp2vel
 import emcee
+from dynesty import NestedSampler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
@@ -70,6 +72,20 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
                                     backend=backend)
     sampler.run_mcmc(pos, nsteps, progress=True)
     return
+
+def run_dynesty(logp, priors, dbname):
+    """ Perform fitting with dynesty. """
+    def prior_transform(u):
+        x = np.zeros(len(u))
+        for i, param in enumerate(logp.parnames):
+            x[i] = priors[param].ppf(u[i])
+        return x
+    ndim = len(logp.parnames)
+    sampler = NestedSampler(logp, prior_transform, ndim)
+    sampler.run_nested()
+    results = sampler.results
+    with open(dbname, "wb") as f:
+        pickle.dump(results, f)
 
 def make_table(trace, outtab):
     data = np.array([trace[p].data for p in trace.colnames]).T
@@ -148,10 +164,11 @@ def plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, output,
     plt.close(fig)
     return
 
-def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
+def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False,
+                 sampler="emcee"):
     """ Run paintbox on test galaxies. """
     elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
-                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu"] if \
+                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "a/Fe", "T"] if \
                 elements is None else elements
     velscale = int(sigma / 3)
     # Prepare models for fitting
@@ -202,16 +219,25 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
         flamerr /= norm
         logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
         priors = make_priors(logp.parnames, ssp.limits, wranges)
-        # Running fit
-        dbname = "{}_studt2_{}.h5".format(galaxy, nsteps)
-        # Run in any directory outside Dropbox to avoid conflicts
-        tmp_db = os.path.join(os.getcwd(), dbname)
-        if os.path.exists(tmp_db):
-            os.remove(tmp_db)
-        outdb = os.path.join(gal_dir, dbname)
-        if not os.path.exists(outdb) or redo:
-            run_sampler(logp, priors, tmp_db, nsteps=nsteps)
-            shutil.move(tmp_db, outdb)
+        if sampler == "emcee":
+            # Running fit
+            dbname = "{}_studt2_{}.h5".format(galaxy, nsteps)
+            # Run in any directory outside Dropbox to avoid conflicts
+            tmp_db = os.path.join(os.getcwd(), dbname)
+            if os.path.exists(tmp_db):
+                os.remove(tmp_db)
+            outdb = os.path.join(gal_dir, dbname)
+            if not os.path.exists(outdb) or redo:
+                run_sampler(logp, priors, tmp_db, nsteps=nsteps)
+                shutil.move(tmp_db, outdb)
+        elif sampler == "dynesty":
+            dbname = "{}_studt2_dynesty.pkl".format(galaxy)
+            outdb = os.path.join(gal_dir, dbname)
+            if not os.path.exists(dbname) or redo:
+                run_dynesty(logp, priors, outdb)
+            with open(outdb, "rb") as f:
+                results = pickle.load(f)
+            # samples = results.samples
         # Load database and make a table with summary statistics
         # reader = emcee.backends.HDFBackend(outdb)
         # tracedata = reader.get_chain(discard=4500,
@@ -225,4 +251,8 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
         #              bestfit=bestfit)
 
 if __name__ == "__main__":
-    run_testdata(redo=True)
+    sampler = "dynesty"
+    elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
+     "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu"]
+    elements = elements if sampler == "emcee" else None
+    run_testdata(elements=elements, sampler=sampler)
