@@ -4,12 +4,15 @@ import glob
 import shutil
 
 from astropy.table import Table, vstack
+import astropy.constants as const
 import numpy as np
 from scipy import stats
 import paintbox as pb
 from paintbox.utils import CvD18
 from paintbox.utils.disp2vel import disp2vel
 import emcee
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import context
 
@@ -17,7 +20,7 @@ def make_priors(parnames, ssp_ranges, wranges):
     """ Define priors for the model. """
     priors = {}
     priors["Vsyst"] = stats.uniform(loc=-1000, scale=2000)
-    priors["sigma"] = stats.uniform(loc=50, scale=200)
+    priors["sigma"] = stats.uniform(loc=50, scale=300)
     priors["eta"] = stats.uniform(loc=1., scale=19)
     priors["nu"] = stats.uniform(loc=2, scale=20)
     for param in parnames:
@@ -29,21 +32,14 @@ def make_priors(parnames, ssp_ranges, wranges):
         if pname in ssp_ranges:
             vmin, vmax = ssp_ranges[pname]
             priors[param] = stats.uniform(loc=vmin, scale=vmax - vmin)
-    for wr in wranges:
-        # Scale of models
-        p = "w{}".format(wr)
-        if p in parnames:
-            priors[p] = stats.uniform(loc=0, scale=2)
-        # Polynomials
-        pname = "p{}".format(wr)
-        for i in range(1000):
-            parname = "{}_{}".format(pname, i)
-            if parname not in parnames:
-                continue
-            if i == 0:
-                priors[parname] = stats.uniform(loc=0, scale=2)
-            else:
-                priors[parname] = stats.norm(0, 0.05)
+    for i in range(1000):
+        parname = "poly_{}".format(i)
+        if parname not in parnames:
+            continue
+        if i == 0:
+            priors[parname] = stats.uniform(loc=0, scale=10)
+        else:
+            priors[parname] = stats.norm(0, 0.05)
     for param in parnames:
         if param not in priors:
             print("Missing prior for {}".format(param))
@@ -56,14 +52,16 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
     logpdf = []
     for i, param in enumerate(loglike.parnames):
         logpdf.append(priors[param].logpdf)
-        pos[:, i] = priors[param].rvs(nwalkers)
+        if param in ["pVIS_0", "pUVB_0", "pNIR_0"]:
+            pos[:, i] = stats.lognorm(0.25, 0).rvs(nwalkers)
+        else:
+            pos[:, i] = priors[param].rvs(nwalkers)
     def log_probability(theta):
         lp = np.sum([prior(val) for prior, val in zip(logpdf, theta)])
         if not np.isfinite(lp) or np.isnan(lp):
             return -np.inf
         ll = loglike(theta)
         if not np.isfinite(ll):
-            # print("nu={}".format(theta[loglike.parnames.index("nu")]), ll)
             return -np.inf
         return lp + ll
     backend = emcee.backends.HDFBackend(outdb)
@@ -92,6 +90,64 @@ def make_table(trace, outtab):
     tab.write(outtab, overwrite=True)
     return tab
 
+def plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, output,
+                 skylines=None, bestfit=None):
+    width_ratios = [w[-1]-w[0] for w in waves]
+    fig, axs = plt.subplots(nrows=2, ncols=len(waves), gridspec_kw={
+        'height_ratios': [2, 1], "width_ratios": width_ratios},
+                            figsize=(2 * 3.54, 3))
+    for i in range(len(waves)):
+        ax0 = fig.add_subplot(axs[0, i])
+        sed = seds[i]
+        t = np.array([trace[p].data for p in sed.parnames]).T
+        k = np.array([trace.colnames.index(p) for p in sed.parnames])
+        theta = np.array(bestfit[k])
+        n = len(t)
+        wave = waves[i]
+        flux = np.ma.masked_array(fluxes[i], mask=masks[i])
+        print(np.all(np.isnan(flux)))
+        fluxerr = fluxerrs[i]
+        # models = np.zeros((n, len(wave)))
+        # for j in tqdm(range(len(trace)), desc="Generating models "
+        #                                                  "for trace"):
+        #     models[j] = seds[i](t[j])
+        # y = np.percentile(models, 50, axis=(0,))
+        # y = np.ma.masked_array(y, mask=masks[i])
+        # yuerr = np.percentile(models, 84, axis=(0,)) - y
+        # ylerr = y - np.percentile(models, 16, axis=(0,))
+        y = np.ma.masked_array(sed(theta), mask=masks[i])
+        ax0.errorbar(wave, flux, yerr=fluxerr, fmt="-",
+                     ecolor="0.8", c="tab:blue")
+        ax0.plot(wave, y, c="tab:orange")
+        ax0.xaxis.set_ticklabels([])
+        if i == 0:
+            ax0.set_ylabel("Flux")
+        ax1 = fig.add_subplot(axs[1,i])
+        ax1.errorbar(wave, 100 * (flux - y) / flux, yerr=100 * fluxerr, \
+                                                                fmt="-",
+                     ecolor="0.8", c="tab:blue")
+        ax1.plot(wave, 100 * (flux - y) / flux, c="tab:orange")
+        if i == 0:
+            ax1.set_ylabel("Res. (\%)")
+        ax1.set_xlabel("$\lambda$ (Angstrom)")
+        # ax1.set_ylim(-5, 5)
+        ax1.axhline(y=0, ls="--", c="k")
+        # Include sky lines shades
+        if skylines is not None:
+            for ax in [ax0, ax1]:
+                w0, w1 = ax0.get_xlim()
+                for skyline in skylines:
+                    if (skyline < w0) or (skyline > w1):
+                        continue
+                    ax.axvspan(skyline - 3, skyline + 3, color="0.9",
+                               zorder=-100)
+    plt.tight_layout()
+    plt.savefig(output, dpi=300)
+    plt.show()
+    plt.clf()
+    plt.close(fig)
+    return
+
 def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
     """ Run paintbox on test galaxies. """
     elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
@@ -118,40 +174,33 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
     galaxies = os.listdir(data_dir)
     wranges = ["UVB", "VIS", "NIR"]
     # Test values
-    pssp = [0, 10, 2.5, 2.5]
+    pssp = [0, 10, 1.5, 1.5]
     pelements = [0] * len(elements)
     pkin = [100, 150]
+    p0s = []
     for galaxy in galaxies:
+        print(galaxy)
         gal_dir = os.path.join(data_dir, galaxy)
         fname = os.path.join(gal_dir, "{}_sig{}.fits".format(galaxy, sigma))
-        seds, logps = [], []
-        norms = np.zeros((3,))
-        for i, wr in enumerate(wranges):
-            t = Table.read(fname, hdu=i + 1)
-            wave = t["wave"].data
-            flux = t["flam"].data
-            fluxerr = t["flamerr"].data
-            mask = t["mask"].data.astype(bool)
-            # Normalize data to
-            norm = np.median(flux)
-            flux /= norm
-            fluxerr /= norm
-            norms[i] = norm
-            # Determination of polynomial order
-            porder = int((wave[-1] - wave[0]) / 200)
-            poly = pb.Polynomial(wave, porder, zeroth=True,
-                                 pname="p{}".format(wr))
-
-            # Making paintbox model
-            sed = pb.Resample(wave, ssp_kin) * poly
-            ppoly = [1] * (porder + 1)
-            # p0 = np.array(pssp + pelements + pkin + ppoly)
-            # print(sed(p0))
-            # Changing name of the flux parameters to avoid confusion
-            seds.append(sed)
-            logp = pb.StudT2LogLike(flux, sed, obserr=fluxerr, mask=mask)
-            logps.append(logp)
-        logp = logps[0] + logps[1] + logps[2]
+        # Read tables
+        ts = [Table.read(fname, hdu=i+1) for i in range(len(wranges))]
+        wave = np.hstack([t["wave"].data for t in ts])
+        flam = np.hstack([t["flam"].data for t in ts])
+        flamerr = np.hstack([t["flamerr"].data for t in ts])
+        mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
+        # Making paintbox model
+        porder = int((wave.max() - wave.min()) / 200)
+        poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")
+        # Making paintbox model
+        sed = pb.Resample(wave, ssp_kin) * poly
+        ppoly = [0] * (porder + 1)
+        ppoly[0] = 1.
+        # Vector for tests
+        p0 = np.array(pssp + pelements + pkin + ppoly)
+        norm = np.ma.median(np.ma.masked_array(flam, mask=mask))
+        flam /= norm
+        flamerr /= norm
+        logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
         priors = make_priors(logp.parnames, ssp.limits, wranges)
         # Running fit
         dbname = "{}_studt2_{}.h5".format(galaxy, nsteps)
@@ -164,15 +213,16 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False):
             run_sampler(logp, priors, tmp_db, nsteps=nsteps)
             shutil.move(tmp_db, outdb)
         # Load database and make a table with summary statistics
-        reader = emcee.backends.HDFBackend(outdb)
-        tracedata = reader.get_chain(discard=int(0.9 * nsteps),
-                                     thin=100, flat=True)
-        print(tracedata.shape)
-        print(len(logp.parnames))
-        input()
-        trace = Table(tracedata, names=logp.parnames)
-        outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
-        make_table(trace, outtab)
+        # reader = emcee.backends.HDFBackend(outdb)
+        # tracedata = reader.get_chain(discard=4500,
+        #                              thin=100, flat=True)
+        # trace = Table(tracedata, names=logp.parnames)
+        # bestfit = np.percentile(tracedata, 50, axis=(0,))
+        # outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
+        # make_table(trace, outtab)
+        # outimg = outdb.replace(".h5", "fitting.png")
+        # plot_fitting(waves, flams, flamerrs, masks, seds, trace, outimg,
+        #              bestfit=bestfit)
 
 if __name__ == "__main__":
-    run_testdata(redo=True, nsteps=10)
+    run_testdata(redo=True)
