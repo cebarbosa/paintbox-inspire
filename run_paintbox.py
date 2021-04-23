@@ -49,30 +49,40 @@ def make_priors(parnames, ssp_ranges, wranges):
             print("Missing prior for {}".format(param))
     return priors
 
-def run_sampler(loglike, priors, outdb, nsteps=5000):
-    ndim = len(loglike.parnames)
+def log_probability(theta):
+    global priors
+    global logp
+    lp = np.sum([priors[p].logpdf(x) for p, x in zip(logp.parnames, theta)])
+    if not np.isfinite(lp) or np.isnan(lp):
+        return -np.inf
+    ll = logp(theta)
+    if not np.isfinite(ll):
+        return -np.inf
+    return lp + ll
+
+def run_sampler(outdb, nsteps=5000):
+    global logp
+    global priors
+    ndim = len(logp.parnames)
     nwalkers = 2 * ndim
     pos = np.zeros((nwalkers, ndim))
     logpdf = []
-    for i, param in enumerate(loglike.parnames):
+    for i, param in enumerate(logp.parnames):
         logpdf.append(priors[param].logpdf)
         if param in ["pVIS_0", "pUVB_0", "pNIR_0"]:
             pos[:, i] = stats.lognorm(0.25, 0).rvs(nwalkers)
         else:
             pos[:, i] = priors[param].rvs(nwalkers)
-    def log_probability(theta):
-        lp = np.sum([prior(val) for prior, val in zip(logpdf, theta)])
-        if not np.isfinite(lp) or np.isnan(lp):
-            return -np.inf
-        ll = loglike(theta)
-        if not np.isfinite(ll):
-            return -np.inf
-        return lp + ll
     backend = emcee.backends.HDFBackend(outdb)
     backend.reset(nwalkers, ndim)
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability,
-                                    backend=backend)
-    sampler.run_mcmc(pos, nsteps, progress=True)
+    pool_size = 1
+    if platform.node() in context.mp_pool_size:
+        pool_size = context.mp_pool_size[platform.node()]
+    pool = mp.Pool(pool_size)
+    with pool:
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability,
+                                         backend=backend, pool=pool)
+        sampler.run_mcmc(pos, nsteps, progress=True)
     return
 
 class PriorTransform():
@@ -90,8 +100,8 @@ def run_dynesty(logp, priors, dbname):
     """ Perform fitting with dynesty. """
     pool_size = 1
     pool = None
-    if platform.node() in context.dynest_pool_size:
-        pool_size = context.dynest_pool_size[platform.node()]
+    if platform.node() in context.mp_pool_size:
+        pool_size = context.mp_pool_size[platform.node()]
         pool = mp.Pool(pool_size)
         print("Pool size: ", pool_size)
     prior_transform = PriorTransform(logp.parnames, priors)
@@ -180,12 +190,15 @@ def plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, output,
     plt.close(fig)
     return
 
-def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False,
-                 sampler="emcee"):
+def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
+                 elements=None):
     """ Run paintbox on test galaxies. """
+    global logp
+    global priors
     elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
-                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "a/Fe", "T"] if \
-                elements is None else elements
+                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "a/Fe",
+                "T"] if \
+        elements is None else elements
     velscale = int(sigma / 3)
     # Prepare models for fitting
     cvd_data_dir = "/home/kadu/Dropbox/SSPs/CvD18"
@@ -216,7 +229,7 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False,
         gal_dir = os.path.join(data_dir, galaxy)
         fname = os.path.join(gal_dir, "{}_sig{}.fits".format(galaxy, sigma))
         # Read tables
-        ts = [Table.read(fname, hdu=i+1) for i in range(len(wranges))]
+        ts = [Table.read(fname, hdu=i + 1) for i in range(len(wranges))]
         wave = np.hstack([t["wave"].data for t in ts])
         flam = np.hstack([t["flam"].data for t in ts])
         flamerr = np.hstack([t["flamerr"].data for t in ts])
@@ -244,7 +257,7 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False,
                 os.remove(tmp_db)
             outdb = os.path.join(gal_dir, dbname)
             if not os.path.exists(outdb) or redo:
-                run_sampler(logp, priors, tmp_db, nsteps=nsteps)
+                run_sampler(tmp_db, nsteps=nsteps)
                 shutil.move(tmp_db, outdb)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
@@ -265,10 +278,6 @@ def run_testdata(sigma=300, elements=None, nsteps=5000, redo=False,
         # outimg = outdb.replace(".h5", "fitting.png")
         # plot_fitting(waves, flams, flamerrs, masks, seds, trace, outimg,
         #              bestfit=bestfit)
-
 if __name__ == "__main__":
-    sampler = "dynesty"
-    elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
-     "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu"]
-    elements = elements if sampler == "emcee" else None
-    run_testdata(elements=elements, sampler=sampler)
+    run_testdata(redo=True)
+

@@ -63,5 +63,5 @@ txtwidth = 7.24551
 flam_unit = u.erg / u.cm / u.cm / u.s / u.AA
 fnu_unit = u.erg / u.s / u.cm / u.cm / u.Hz
 
-dynest_pool_size = {"kadu-Inspiron-5557": 2, "yaci.iag.usp.br": 32}
+mp_pool_size = {"kadu-Inspiron-5557": 4, "yaci.iag.usp.br": 32}
 
