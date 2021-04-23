@@ -3,6 +3,7 @@ import os
 import glob
 import shutil
 import pickle
+import platform
 
 from astropy.table import Table, vstack
 import astropy.constants as const
@@ -15,6 +16,7 @@ import emcee
 from dynesty import NestedSampler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import multiprocessing as mp
 
 import context
 
@@ -75,13 +77,16 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
 
 def run_dynesty(logp, priors, dbname):
     """ Perform fitting with dynesty. """
+    pool = None
+    if platform.node() in context.dynest_pool_size:
+        pool = mp.Pool(context.dynest_pool_size[platform.node()])
     def prior_transform(u):
         x = np.zeros(len(u))
         for i, param in enumerate(logp.parnames):
             x[i] = priors[param].ppf(u[i])
         return x
     ndim = len(logp.parnames)
-    sampler = NestedSampler(logp, prior_transform, ndim)
+    sampler = NestedSampler(logp, prior_transform, ndim, pool=pool)
     sampler.run_nested()
     results = sampler.results
     with open(dbname, "wb") as f:
