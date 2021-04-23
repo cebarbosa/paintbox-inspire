@@ -89,8 +89,7 @@ def run_dynesty(logp, priors, dbname):
             x[i] = priors[param].ppf(u[i])
         return x
     ndim = len(logp.parnames)
-    sampler = NestedSampler(logp, prior_transform, ndim, pool=pool,
-                            queue_size=pool_size)
+    sampler = NestedSampler(logp, prior_transform, ndim, queue_size=pool_size)
     sampler.run_nested()
     results = sampler.results
     with open(dbname, "wb") as f:
