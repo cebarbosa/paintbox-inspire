@@ -75,6 +75,17 @@ def run_sampler(loglike, priors, outdb, nsteps=5000):
     sampler.run_mcmc(pos, nsteps, progress=True)
     return
 
+class PriorTransform():
+    def __init__(self, parnames, priors):
+        self.parnames = parnames
+        self.priors = priors
+
+    def __call__(self, u):
+        x = np.zeros(len(u))
+        for i, param in enumerate(self.parnames):
+            x[i] = self.priors[param].ppf(u[i])
+        return x
+
 def run_dynesty(logp, priors, dbname):
     """ Perform fitting with dynesty. """
     pool_size = 1
@@ -83,13 +94,10 @@ def run_dynesty(logp, priors, dbname):
         pool_size = context.dynest_pool_size[platform.node()]
         pool = mp.Pool(pool_size)
         print("Pool size: ", pool_size)
-    def prior_transform(u):
-        x = np.zeros(len(u))
-        for i, param in enumerate(logp.parnames):
-            x[i] = priors[param].ppf(u[i])
-        return x
+    prior_transform = PriorTransform(logp.parnames, priors)
     ndim = len(logp.parnames)
-    sampler = NestedSampler(logp, prior_transform, ndim, queue_size=pool_size)
+    sampler = NestedSampler(logp, prior_transform, ndim, queue_size=pool_size,
+                            pool=pool)
     sampler.run_nested()
     results = sampler.results
     with open(dbname, "wb") as f:
