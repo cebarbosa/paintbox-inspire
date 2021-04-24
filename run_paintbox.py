@@ -256,17 +256,13 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             reader = emcee.backends.HDFBackend(outdb)
             tracedata = reader.get_chain(discard=int(0.9 * nsteps),
                                          thin=100, flat=True)
-            print(tracedata.shape)
-            print(logp.parnames)
-            print(len(logp.parnames))
-            input()
             trace = Table(tracedata, names=logp.parnames)
-            bestfit = np.percentile(tracedata, 50, axis=(0,))
+            # bestfit = np.percentile(tracedata, 50, axis=(0,))
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
-            outimg = outdb.replace(".h5", "fitting.png")
-            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-                         bestfit=bestfit)
+            # outimg = outdb.replace(".h5", "fitting.png")
+            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+            #              bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
