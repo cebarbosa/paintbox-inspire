@@ -41,7 +41,10 @@ def make_priors(parnames, ssp_ranges, wranges):
         if parname not in parnames:
             continue
         if i == 0:
-            priors[parname] = stats.uniform(loc=0, scale=10)
+            sd = 1
+            a = -1 / sd
+            b = np.infty
+            priors[parname] = stats.truncnorm(a, b, 1, sd)
         else:
             priors[parname] = stats.norm(0, 0.05)
     for param in parnames:
@@ -69,10 +72,7 @@ def run_sampler(outdb, nsteps=5000):
     logpdf = []
     for i, param in enumerate(logp.parnames):
         logpdf.append(priors[param].logpdf)
-        if param in ["pVIS_0", "pUVB_0", "pNIR_0"]:
-            pos[:, i] = stats.lognorm(0.25, 0).rvs(nwalkers)
-        else:
-            pos[:, i] = priors[param].rvs(nwalkers)
+        pos[:, i] = priors[param].rvs(nwalkers)
     backend = emcee.backends.HDFBackend(outdb)
     backend.reset(nwalkers, ndim)
     pool_size = 1
@@ -132,57 +132,51 @@ def make_table(trace, outtab):
     tab.write(outtab, overwrite=True)
     return tab
 
-def plot_fitting(waves, fluxes, fluxerrs, masks, seds, trace, output,
+def plot_fitting(wave, flux, fluxerr, mask, sed, trace, output,
                  skylines=None, bestfit=None):
-    width_ratios = [w[-1]-w[0] for w in waves]
-    fig, axs = plt.subplots(nrows=2, ncols=len(waves), gridspec_kw={
-        'height_ratios': [2, 1], "width_ratios": width_ratios},
-                            figsize=(2 * 3.54, 3))
-    for i in range(len(waves)):
-        ax0 = fig.add_subplot(axs[0, i])
-        sed = seds[i]
-        t = np.array([trace[p].data for p in sed.parnames]).T
-        k = np.array([trace.colnames.index(p) for p in sed.parnames])
-        theta = np.array(bestfit[k])
-        n = len(t)
-        wave = waves[i]
-        flux = np.ma.masked_array(fluxes[i], mask=masks[i])
-        print(np.all(np.isnan(flux)))
-        fluxerr = fluxerrs[i]
-        # models = np.zeros((n, len(wave)))
-        # for j in tqdm(range(len(trace)), desc="Generating models "
-        #                                                  "for trace"):
-        #     models[j] = seds[i](t[j])
-        # y = np.percentile(models, 50, axis=(0,))
-        # y = np.ma.masked_array(y, mask=masks[i])
-        # yuerr = np.percentile(models, 84, axis=(0,)) - y
-        # ylerr = y - np.percentile(models, 16, axis=(0,))
-        y = np.ma.masked_array(sed(theta), mask=masks[i])
-        ax0.errorbar(wave, flux, yerr=fluxerr, fmt="-",
-                     ecolor="0.8", c="tab:blue")
-        ax0.plot(wave, y, c="tab:orange")
-        ax0.xaxis.set_ticklabels([])
-        if i == 0:
-            ax0.set_ylabel("Flux")
-        ax1 = fig.add_subplot(axs[1,i])
-        ax1.errorbar(wave, 100 * (flux - y) / flux, yerr=100 * fluxerr, \
-                                                                fmt="-",
-                     ecolor="0.8", c="tab:blue")
-        ax1.plot(wave, 100 * (flux - y) / flux, c="tab:orange")
-        if i == 0:
-            ax1.set_ylabel("Res. (\%)")
-        ax1.set_xlabel("$\lambda$ (Angstrom)")
-        # ax1.set_ylim(-5, 5)
-        ax1.axhline(y=0, ls="--", c="k")
-        # Include sky lines shades
-        if skylines is not None:
-            for ax in [ax0, ax1]:
-                w0, w1 = ax0.get_xlim()
-                for skyline in skylines:
-                    if (skyline < w0) or (skyline > w1):
-                        continue
-                    ax.axvspan(skyline - 3, skyline + 3, color="0.9",
-                               zorder=-100)
+    fig, axs = plt.subplots(nrows=2, ncols=1, gridspec_kw={
+        'height_ratios': [2, 1]}, figsize=(2 * 3.54, 3))
+    ax0 = fig.add_subplot(axs[0])
+    t = np.array([trace[p].data for p in sed.parnames]).T
+    k = np.array([trace.colnames.index(p) for p in sed.parnames])
+    for i in range(len(logp.parnames)):
+        print(logp.parnames[i], bestfit[i])
+    n = len(t)
+    flux = np.ma.masked_array(flux, mask=mask)
+    fluxerr = np.ma.masked_array(fluxerr, mask=mask)
+    # models = np.zeros((n, len(wave)))
+    # for j in tqdm(range(len(trace)), desc="Generating models "
+    #                                                  "for trace"):
+    #     models[j] = seds[i](t[j])
+    # y = np.percentile(models, 50, axis=(0,))
+    # y = np.ma.masked_array(y, mask=masks[i])
+    # yuerr = np.percentile(models, 84, axis=(0,)) - y
+    # ylerr = y - np.percentile(models, 16, axis=(0,))
+    theta = bestfit[:-2]
+    y = np.ma.masked_array(sed(theta), mask=mask)
+    ax0.errorbar(wave, flux, yerr=fluxerr, fmt="-",
+                 ecolor="0.8", c="tab:blue")
+    ax0.plot(wave, y, c="tab:orange")
+    ax0.xaxis.set_ticklabels([])
+    ax0.set_ylabel("Flux")
+    ax1 = fig.add_subplot(axs[1])
+    ax1.errorbar(wave, 100 * (flux - y) / flux, yerr=100 * fluxerr, \
+                                                            fmt="-",
+                 ecolor="0.8", c="tab:blue")
+    ax1.plot(wave, 100 * (flux - y) / flux, c="tab:orange")
+    ax1.set_ylabel("Res. (\%)")
+    ax1.set_xlabel("$\lambda$ (Angstrom)")
+    # ax1.set_ylim(-5, 5)
+    ax1.axhline(y=0, ls="--", c="k")
+    # Include sky lines shades
+    if skylines is not None:
+        for ax in [ax0, ax1]:
+            w0, w1 = ax0.get_xlim()
+            for skyline in skylines:
+                if (skyline < w0) or (skyline > w1):
+                    continue
+                ax.axvspan(skyline - 3, skyline + 3, color="0.9",
+                           zorder=-100)
     plt.tight_layout()
     plt.savefig(output, dpi=300)
     plt.show()
@@ -196,8 +190,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
     global logp
     global priors
     elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
-                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "a/Fe",
-                "T"] if \
+                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "as/Fe"] if \
         elements is None else elements
     velscale = int(sigma / 3)
     # Prepare models for fitting
@@ -213,7 +206,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
     wave = disp2vel(np.array([3510, 21500], dtype="object"), velscale)
     ssp = CvD18(wave, ssp_files=ssp_files, rf_files=rf_files,
                 outdir=models_dir, outname=outname,
-                elements=elements)
+                elements=elements, norm=True)
     ssp_kin = pb.LOSVDConv(ssp, losvdpars=["Vsyst", "sigma"])
     # Perform fitting
     data_dir = os.path.join(context.data_dir, "test")
@@ -259,6 +252,17 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             if not os.path.exists(outdb) or redo:
                 run_sampler(tmp_db, nsteps=nsteps)
                 shutil.move(tmp_db, outdb)
+            # Load database and make a table with summary statistics
+            reader = emcee.backends.HDFBackend(outdb)
+            tracedata = reader.get_chain(discard=int(0.9 * nsteps),
+                                         thin=100, flat=True)
+            trace = Table(tracedata, names=logp.parnames)
+            bestfit = np.percentile(tracedata, 50, axis=(0,))
+            outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
+            make_table(trace, outtab)
+            outimg = outdb.replace(".h5", "fitting.png")
+            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+                         bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
@@ -267,17 +271,6 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             with open(outdb, "rb") as f:
                 results = pickle.load(f)
             # samples = results.samples
-        # Load database and make a table with summary statistics
-        # reader = emcee.backends.HDFBackend(outdb)
-        # tracedata = reader.get_chain(discard=4500,
-        #                              thin=100, flat=True)
-        # trace = Table(tracedata, names=logp.parnames)
-        # bestfit = np.percentile(tracedata, 50, axis=(0,))
-        # outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
-        # make_table(trace, outtab)
-        # outimg = outdb.replace(".h5", "fitting.png")
-        # plot_fitting(waves, flams, flamerrs, masks, seds, trace, outimg,
-        #              bestfit=bestfit)
 if __name__ == "__main__":
     run_testdata(redo=True)
 
