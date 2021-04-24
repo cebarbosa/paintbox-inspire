@@ -25,7 +25,7 @@ def make_priors(parnames, ssp_ranges, wranges):
     priors = {}
     priors["Vsyst"] = stats.uniform(loc=-1000, scale=2000)
     priors["sigma"] = stats.uniform(loc=50, scale=300)
-    priors["eta"] = stats.uniform(loc=1., scale=19)
+    priors["eta"] = stats.uniform(loc=1., scale=100)
     priors["nu"] = stats.uniform(loc=2, scale=20)
     for param in parnames:
         psplit = param.split("_")
@@ -256,13 +256,17 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             reader = emcee.backends.HDFBackend(outdb)
             tracedata = reader.get_chain(discard=int(0.9 * nsteps),
                                          thin=100, flat=True)
+            print(tracedata.shape)
+            print(logp.parnames)
+            print(len(logp.parnames))
+            input()
             trace = Table(tracedata, names=logp.parnames)
             bestfit = np.percentile(tracedata, 50, axis=(0,))
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
             outimg = outdb.replace(".h5", "fitting.png")
-            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-            #              bestfit=bestfit)
+            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+                         bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
