@@ -261,8 +261,8 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
             outimg = outdb.replace(".h5", "fitting.png")
-            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-                         bestfit=bestfit)
+            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+            #              bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
@@ -272,5 +272,5 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
                 results = pickle.load(f)
             # samples = results.samples
 if __name__ == "__main__":
-    run_testdata(redo=True)
+    run_testdata()
 
