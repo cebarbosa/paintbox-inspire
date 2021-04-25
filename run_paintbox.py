@@ -26,7 +26,7 @@ def make_priors(parnames, ssp_ranges, wranges):
     priors["Vsyst"] = stats.uniform(loc=-1000, scale=2000)
     priors["sigma"] = stats.uniform(loc=50, scale=300)
     priors["eta"] = stats.uniform(loc=1., scale=100)
-    priors["nu"] = stats.uniform(loc=2, scale=20)
+    priors["nu"] = stats.uniform(loc=2.01, scale=20)
     for param in parnames:
         psplit = param.split("_")
         if len(psplit) > 1:
@@ -226,7 +226,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         wave = np.hstack([t["wave"].data for t in ts])
         flam = np.hstack([t["flam"].data for t in ts])
         flamerr = np.hstack([t["flamerr"].data for t in ts])
-        mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
+        mask = np.invert(np.hstack([t["mask"].data.astype(bool) for t in ts]))
         # Making paintbox model
         porder = int((wave.max() - wave.min()) / 200)
         poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")
@@ -254,15 +254,19 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
                 shutil.move(tmp_db, outdb)
             # Load database and make a table with summary statistics
             reader = emcee.backends.HDFBackend(outdb)
-            tracedata = reader.get_chain(discard=int(0.9 * nsteps),
-                                         thin=100, flat=True)
+            tracedata = reader.get_chain(discard=0,
+                                         thin=5000, flat=True)
             trace = Table(tracedata, names=logp.parnames)
-            # bestfit = np.percentile(tracedata, 50, axis=(0,))
+            for k,t in enumerate(tqdm(tracedata)):
+                print(logp(t))
+                plt.plot(k, logp(t))
+            plt.show()
+            bestfit = np.percentile(tracedata, 50, axis=(0,))
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
-            # outimg = outdb.replace(".h5", "fitting.png")
-            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-            #              bestfit=bestfit)
+            outimg = outdb.replace(".h5", "fitting.png")
+            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+                         bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
