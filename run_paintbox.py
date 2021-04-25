@@ -225,6 +225,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         ts = [Table.read(fname, hdu=i + 1) for i in range(len(wranges))]
         wave = np.hstack([t["wave"].data for t in ts])
         flam = np.hstack([t["flam"].data for t in ts])
+
         flamerr = np.hstack([t["flamerr"].data for t in ts])
         mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
         # Making paintbox model
@@ -236,7 +237,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         ppoly[0] = 1.
         # Vector for tests
         p0 = np.array(pssp + pelements + pkin + ppoly)
-        norm = np.ma.median(np.ma.masked_array(flam, mask=mask))
+        norm = np.ma.median(np.ma.masked_array(flam, mask=np.invert(mask)))
         flam /= norm
         flamerr /= norm
         logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
@@ -272,5 +273,5 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
                 results = pickle.load(f)
             # samples = results.samples
 if __name__ == "__main__":
-    run_testdata()
+    run_testdata(redo=True)
 
