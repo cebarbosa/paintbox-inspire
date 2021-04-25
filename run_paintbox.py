@@ -226,7 +226,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         wave = np.hstack([t["wave"].data for t in ts])
         flam = np.hstack([t["flam"].data for t in ts])
         flamerr = np.hstack([t["flamerr"].data for t in ts])
-        mask = np.invert(np.hstack([t["mask"].data.astype(bool) for t in ts]))
+        mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
         # Making paintbox model
         porder = int((wave.max() - wave.min()) / 200)
         poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")

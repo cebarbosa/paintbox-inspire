@@ -73,7 +73,7 @@ if __name__ == "__main__":
                      label=wranges[i])
             plt.plot(owave, y + ospecerr, c="C{}".format(i), ls="--")
             plt.plot(owave, y - ospecerr, c="C{}".format(i), ls="--")
-            mask = np.where(goodpix, 0, 1)
+            mask = np.where(goodpix, 1, 0)
             t = Table([owave * u.Angstrom, ospec * context.flam_unit,
                        ospecerr * context.flam_unit, mask],
                       names=["wave", "flam", "flamerr", "mask"])
