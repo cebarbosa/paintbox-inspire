@@ -257,16 +257,12 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
             tracedata = reader.get_chain(discard=0,
                                          thin=5000, flat=True)
             trace = Table(tracedata, names=logp.parnames)
-            for k,t in enumerate(tqdm(tracedata)):
-                print(logp(t))
-                plt.plot(k, logp(t))
-            plt.show()
             bestfit = np.percentile(tracedata, 50, axis=(0,))
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
-            outimg = outdb.replace(".h5", "fitting.png")
-            plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-                         bestfit=bestfit)
+            # outimg = outdb.replace(".h5", "fitting.png")
+            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+            #              bestfit=bestfit)
         elif sampler == "dynesty":
             dbname = "{}_studt2_dynesty.pkl".format(galaxy)
             outdb = os.path.join(gal_dir, dbname)
