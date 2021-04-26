@@ -134,6 +134,7 @@ def make_table(trace, outtab):
 
 def plot_fitting(wave, flux, fluxerr, mask, sed, trace, output,
                  skylines=None, bestfit=None):
+    mask = np.invert(mask)
     fig, axs = plt.subplots(nrows=2, ncols=1, gridspec_kw={
         'height_ratios': [2, 1]}, figsize=(2 * 3.54, 3))
     ax0 = fig.add_subplot(axs[0])
@@ -184,8 +185,8 @@ def plot_fitting(wave, flux, fluxerr, mask, sed, trace, output,
     plt.close(fig)
     return
 
-def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
-                 elements=None):
+def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=10000,
+                 elements=None, lltype="normal2", dlam=100):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
@@ -229,7 +230,9 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         flamerr = np.hstack([t["flamerr"].data for t in ts])
         mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
         # Making paintbox model
-        porder = int((wave.max() - wave.min()) / 200)
+        porder = int((wave.max() - wave.min()) / dlam)
+        print(porder)
+        input()
         poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")
         # Making paintbox model
         sed = pb.Resample(wave, ssp_kin) * poly
@@ -240,11 +243,14 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
         norm = np.ma.median(np.ma.masked_array(flam, mask=np.invert(mask)))
         flam /= norm
         flamerr /= norm
-        logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
+        if lltype == "studt2":
+            logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
+        elif lltype == "normal2":
+            logp = pb.Normal2LogLike(flam, sed, obserr=flamerr, mask=mask)
         priors = make_priors(logp.parnames, ssp.limits, wranges)
         if sampler == "emcee":
             # Running fit
-            dbname = "{}_studt2_{}.h5".format(galaxy, nsteps)
+            dbname = "{}_{}_{}.h5".format(galaxy, lltype, nsteps)
             # Run in any directory outside Dropbox to avoid conflicts
             tmp_db = os.path.join(os.getcwd(), dbname)
             if os.path.exists(tmp_db):
@@ -255,17 +261,18 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
                 shutil.move(tmp_db, outdb)
             # Load database and make a table with summary statistics
             reader = emcee.backends.HDFBackend(outdb)
-            tracedata = reader.get_chain(discard=0,
-                                         thin=5000, flat=True)
+            tracedata = reader.get_chain(discard=int(0.9 * nsteps),
+                                         thin=100, flat=True)
             trace = Table(tracedata, names=logp.parnames)
             bestfit = np.percentile(tracedata, 50, axis=(0,))
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
-            # outimg = outdb.replace(".h5", "fitting.png")
-            # plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-            #              bestfit=bestfit)
+            if platform.node() == "kadu-Inspiron-5557":
+                outimg = outdb.replace(".h5", "fitting.png")
+                plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
+                             bestfit=bestfit)
         elif sampler == "dynesty":
-            dbname = "{}_studt2_dynesty.pkl".format(galaxy)
+            dbname = "{}_{}_dynesty.pkl".format(galaxy, lltype)
             outdb = os.path.join(gal_dir, dbname)
             if not os.path.exists(dbname) or redo:
                 run_dynesty(logp, priors, outdb)
@@ -273,5 +280,5 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=5000,
                 results = pickle.load(f)
             # samples = results.samples
 if __name__ == "__main__":
-    run_testdata(redo=True)
+    run_testdata()
 
