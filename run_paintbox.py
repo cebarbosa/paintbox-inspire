@@ -185,8 +185,8 @@ def plot_fitting(wave, flux, fluxerr, mask, sed, trace, output,
     plt.close(fig)
     return
 
-def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=10000,
-                 elements=None, lltype="normal2", dlam=100):
+def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=6000,
+                 elements=None, lltype="studt2", dlam=100):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
@@ -211,7 +211,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=10000,
     ssp_kin = pb.LOSVDConv(ssp, losvdpars=["Vsyst", "sigma"])
     # Perform fitting
     data_dir = os.path.join(context.data_dir, "test")
-    galaxies = os.listdir(data_dir)
+    galaxies = sorted(os.listdir(data_dir))
     wranges = ["UVB", "VIS", "NIR"]
     # Test values
     pssp = [0, 10, 1.5, 1.5]
