@@ -231,8 +231,6 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=10000,
         mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
         # Making paintbox model
         porder = int((wave.max() - wave.min()) / dlam)
-        print(porder)
-        input()
         poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")
         # Making paintbox model
         sed = pb.Resample(wave, ssp_kin) * poly
@@ -268,7 +266,7 @@ def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=10000,
             outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
             make_table(trace, outtab)
             if platform.node() == "kadu-Inspiron-5557":
-                outimg = outdb.replace(".h5", "fitting.png")
+                outimg = outdb.replace(".h5", "_fitting.png")
                 plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
                              bestfit=bestfit)
         elif sampler == "dynesty":
