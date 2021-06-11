@@ -2,57 +2,80 @@
 import os
 import glob
 import shutil
-import pickle
 import platform
+import copy
 
-from astropy.table import Table, vstack
-import astropy.constants as const
+from astropy.table import Table, vstack, hstack
 import numpy as np
 from scipy import stats
 import paintbox as pb
-from paintbox.utils import CvD18
-from paintbox.utils.disp2vel import disp2vel
+from paintbox.utils import CvD18, disp2vel
 import emcee
-from dynesty import NestedSampler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from matplotlib import cm
 import multiprocessing as mp
 
 import context
 
-def make_priors(parnames, ssp_ranges, wranges):
-    """ Define priors for the model. """
+def make_paintbox_model(wave, store, dlam=150, nssps=1,
+                        sigma=100, wmin=3501, wmax=21500):
+    velscale = sigma / 3
+    twave = disp2vel(np.array([wmin, wmax], dtype="object"), velscale)
+    ssp = CvD18(twave, sigma=sigma, store=store, libpath=context.cvd_data_dir)
+    limits = ssp.limits
+    porder = int((wave[-1] - wave[0]) / dlam)
+    if nssps > 1:
+        for i in range(nssps):
+            p0 = pb.Polynomial(twave, 0, pname="w")
+            p0.parnames = [f"w_{i+1}"]
+            s = copy.deepcopy(ssp)
+            s.parnames = ["{}_{}".format(_, i+1) for _ in s.parnames]
+            if i == 0:
+                pop = p0 * s
+            else:
+                pop += (p0 * s)
+    else:
+        pop = ssp
+    stars = pb.Resample(wave, pb.LOSVDConv(pop, losvdpars=["Vsyst", "sigma"]))
+    # Adding a polynomial
+    poly = pb.Polynomial(wave, porder, zeroth=True)
+    sed = stars * poly
+    return sed, limits
+
+def set_priors(parnames, limits, vsyst=0, nssps=1):
+    """ Defining prior distributions for the model. """
     priors = {}
-    priors["Vsyst"] = stats.uniform(loc=-1000, scale=2000)
-    priors["sigma"] = stats.uniform(loc=50, scale=300)
-    priors["eta"] = stats.uniform(loc=1., scale=100)
-    priors["nu"] = stats.uniform(loc=2.01, scale=20)
-    for param in parnames:
-        psplit = param.split("_")
-        if len(psplit) > 1:
-            pname, number = psplit
+    for parname in parnames:
+        name = parname.split("_")[0]
+        if name in limits:
+            vmin, vmax = limits[name]
+            delta = vmax - vmin
+            priors[parname] = stats.uniform(loc=vmin, scale=delta)
+        elif parname == "Vsyst":
+            priors[parname] = stats.norm(loc=vsyst, scale=500)
+        elif parname == "eta":
+            priors["eta"] = stats.uniform(loc=1., scale=19)
+        elif parname == "nu":
+            priors["nu"] = stats.uniform(loc=2, scale=20)
+        elif parname == "sigma":
+            priors["sigma"] = stats.uniform(loc=50, scale=300)
+        elif name == "w":
+            priors[parname] = stats.uniform(loc=0, scale=1)
+        elif name == "p":
+            porder = int(parname.split("_")[1])
+            if porder == 0:
+                mu, sd = np.sqrt(2 * nssps), 1
+                a, b = (0 - mu) / sd, (np.infty - mu) / sd
+                priors[parname] = stats.truncnorm(a, b, mu, sd)
+            else:
+                priors[parname] = stats.norm(0, 0.05)
         else:
-            pname = param
-        if pname in ssp_ranges:
-            vmin, vmax = ssp_ranges[pname]
-            priors[param] = stats.uniform(loc=vmin, scale=vmax - vmin)
-    for i in range(1000):
-        parname = "poly_{}".format(i)
-        if parname not in parnames:
-            continue
-        if i == 0:
-            sd = 1
-            a = -1 / sd
-            b = np.infty
-            priors[parname] = stats.truncnorm(a, b, 1, sd)
-        else:
-            priors[parname] = stats.norm(0, 0.05)
-    for param in parnames:
-        if param not in priors:
-            print("Missing prior for {}".format(param))
+            raise ValueError(f"Parameter without prior: {parname}")
     return priors
 
 def log_probability(theta):
+    """ Calculates the probability of a model."""
     global priors
     global logp
     lp = np.sum([priors[p].logpdf(x) for p, x in zip(logp.parnames, theta)])
@@ -75,9 +98,10 @@ def run_sampler(outdb, nsteps=5000):
         pos[:, i] = priors[param].rvs(nwalkers)
     backend = emcee.backends.HDFBackend(outdb)
     backend.reset(nwalkers, ndim)
-    pool_size = 1
-    if platform.node() in context.mp_pool_size:
-        pool_size = context.mp_pool_size[platform.node()]
+    try:
+        pool_size = context.mp_pool_size
+    except:
+        pool_size = 1
     pool = mp.Pool(pool_size)
     with pool:
         sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability,
@@ -85,33 +109,17 @@ def run_sampler(outdb, nsteps=5000):
         sampler.run_mcmc(pos, nsteps, progress=True)
     return
 
-class PriorTransform():
-    def __init__(self, parnames, priors):
-        self.parnames = parnames
-        self.priors = priors
-
-    def __call__(self, u):
-        x = np.zeros(len(u))
-        for i, param in enumerate(self.parnames):
-            x[i] = self.priors[param].ppf(u[i])
-        return x
-
-def run_dynesty(logp, priors, dbname):
-    """ Perform fitting with dynesty. """
-    pool_size = 1
-    pool = None
-    if platform.node() in context.mp_pool_size:
-        pool_size = context.mp_pool_size[platform.node()]
-        pool = mp.Pool(pool_size)
-        print("Pool size: ", pool_size)
-    prior_transform = PriorTransform(logp.parnames, priors)
-    ndim = len(logp.parnames)
-    sampler = NestedSampler(logp, prior_transform, ndim, queue_size=pool_size,
-                            pool=pool)
-    sampler.run_nested()
-    results = sampler.results
-    with open(dbname, "wb") as f:
-        pickle.dump(results, f)
+def weighted_traces(parnames, trace, nssps):
+    """ Combine SSP traces to have mass/luminosity weighted properties"""
+    weights = np.array([trace["w_{}".format(i+1)].data for i in range(
+        nssps)])
+    wtrace = []
+    for param in parnames:
+        data = np.array([trace["{}_{}".format(param, i+1)].data
+                         for i in range(nssps)])
+        t = np.average(data, weights=weights, axis=0)
+        wtrace.append(Table([t], names=["{}_weighted".format(param)]))
+    return hstack(wtrace)
 
 def make_table(trace, outtab):
     data = np.array([trace[p].data for p in trace.colnames]).T
@@ -132,151 +140,161 @@ def make_table(trace, outtab):
     tab.write(outtab, overwrite=True)
     return tab
 
-def plot_fitting(wave, flux, fluxerr, mask, sed, trace, output,
-                 skylines=None, bestfit=None):
-    mask = np.invert(mask)
-    fig, axs = plt.subplots(nrows=2, ncols=1, gridspec_kw={
-        'height_ratios': [2, 1]}, figsize=(2 * 3.54, 3))
-    ax0 = fig.add_subplot(axs[0])
-    t = np.array([trace[p].data for p in sed.parnames]).T
-    k = np.array([trace.colnames.index(p) for p in sed.parnames])
-    for i in range(len(logp.parnames)):
-        print(logp.parnames[i], bestfit[i])
-    n = len(t)
-    flux = np.ma.masked_array(flux, mask=mask)
-    fluxerr = np.ma.masked_array(fluxerr, mask=mask)
-    # models = np.zeros((n, len(wave)))
-    # for j in tqdm(range(len(trace)), desc="Generating models "
-    #                                                  "for trace"):
-    #     models[j] = seds[i](t[j])
-    # y = np.percentile(models, 50, axis=(0,))
-    # y = np.ma.masked_array(y, mask=masks[i])
-    # yuerr = np.percentile(models, 84, axis=(0,)) - y
-    # ylerr = y - np.percentile(models, 16, axis=(0,))
-    theta = bestfit[:-2]
-    y = np.ma.masked_array(sed(theta), mask=mask)
-    ax0.errorbar(wave, flux, yerr=fluxerr, fmt="-",
-                 ecolor="0.8", c="tab:blue")
-    ax0.plot(wave, y, c="tab:orange")
-    ax0.xaxis.set_ticklabels([])
-    ax0.set_ylabel("Flux")
-    ax1 = fig.add_subplot(axs[1])
-    ax1.errorbar(wave, 100 * (flux - y) / flux, yerr=100 * fluxerr, \
-                                                            fmt="-",
-                 ecolor="0.8", c="tab:blue")
-    ax1.plot(wave, 100 * (flux - y) / flux, c="tab:orange")
-    ax1.set_ylabel("Res. (\%)")
-    ax1.set_xlabel("$\lambda$ (Angstrom)")
-    # ax1.set_ylim(-5, 5)
-    ax1.axhline(y=0, ls="--", c="k")
-    # Include sky lines shades
-    if skylines is not None:
-        for ax in [ax0, ax1]:
-            w0, w1 = ax0.get_xlim()
-            for skyline in skylines:
-                if (skyline < w0) or (skyline > w1):
-                    continue
-                ax.axvspan(skyline - 3, skyline + 3, color="0.9",
-                           zorder=-100)
-    plt.tight_layout()
-    plt.savefig(output, dpi=300)
+def plot_likelihood(logp, outdb):
+    nsteps = int(outdb.split("_")[2].split(".")[0])
+    reader = emcee.backends.HDFBackend(outdb)
+    tracedata = reader.get_chain(discard=int(0.9 * nsteps), thin=500,
+                                 flat=True)
+    n = len(tracedata)
+    llf = np.zeros(n)
+    for i in tqdm(range(n)):
+        llf[i] = logp(tracedata[i])
+    plt.plot(llf)
     plt.show()
-    plt.clf()
-    plt.close(fig)
+
+def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
+                 print_pars=None, mask=None, lw=1, galaxy=None):
+    outfig = "{}_fitting".format(db.replace(".h5", ""))
+    if os.path.exists("{}.png".format(outfig)) and not redo:
+        return
+    galaxy = "Observed" if galaxy is None else galaxy
+    mask = np.full_like(wave, True) if mask is None else mask
+    imask = np.invert(mask)
+    fig_width = 3.54  # inches - A&A template for 1 column
+    print_pars = sed.parnames if print_pars is None else print_pars
+    ssp_model = "CvD"
+    labels = {"imf": r"$\Gamma_b$", "Z": "[Z/H]", "T": "Age (Gyr)",
+              "alphaFe": r"[$\alpha$/Fe]", "NaFe": "[Na/Fe]",
+              "Age": "Age (Gyr)", "x1": "$x_1$", "x2": "$x_2$", "Ca": "[Ca/H]",
+              "Fe": "[Fe/H]",
+              "Na": "[Na/Fe]" if ssp_model == "emiles" else "[Na/H]",
+              "K": "[K/H]", "C": "[C/H]", "N": "[N/H]",
+              "Mg": "[Mg/H]", "Si": "[Si/H]", "Ca": "[Ca/H]", "Ti": "[Ti/H]",
+              "as/Fe": "[as/Fe]", "Vsyst": "$V$", "sigma": "$\sigma$",
+              "Cr": "[Cr/H]", "Ba": "[Ba/H]", "Ni": "[Ni/H]", "Co": "[Co/H]",
+              "Eu": "[Eu/H]", "Sr": "[Sr/H]", "V": "[V/H]", "Cu": "[Cu/H]",
+              "Mn": "[Mn/H]"}
+    # Getting numpy array with trace
+    tdata = np.array([trace[p].data for p in sed.parnames]).T
+    # Arrays for the clean plot
+    w = np.ma.masked_array(wave, mask=imask)
+    f = np.ma.masked_array(flux, mask=imask)
+    ferr = np.ma.masked_array(fluxerr, mask=imask)
+    # Defining percentiles/colors for model plots
+    percs = np.linspace(5, 85, 9)
+    fracs = np.array([0.2, 0.4, 0.6, 0.8, 1, 0.8, 0.6, 0.4, 0.2])
+    colors = [cm.get_cmap("Oranges")(f) for f in fracs]
+    # Calculating models
+    models = np.zeros((len(trace), len(wave)))
+    for i in tqdm(range(len(trace)), desc="Loading spectra for plots"):
+        models[i] = sed(tdata[i])
+    m50 = np.median(models, axis=0)
+    mperc = np.zeros((len(percs), len(wave)))
+    for i, per in enumerate(percs):
+        mperc[i] = np.percentile(models, per, axis=0)
+    # Calculating sky model if necessary
+    skyspec = np.zeros((len(trace), len(wave)))
+    if sky is not None:
+        idx = [i for i,p in enumerate(sed.parnames) if p.startswith("sky")]
+        skytrace = trace[:, idx]
+        for i in tqdm(range(len(skytrace)), desc="Loading sky models"):
+            skyspec[i] = sky(skytrace[i])
+    sky50 = np.median(skyspec, axis=0)
+    s50 = np.ma.masked_array(sky50, mask=imask)
+    # Starting plot
+    fig, axs = plt.subplots(2, 1, gridspec_kw={'height_ratios': [2, 1]},
+                            figsize=(2 * fig_width, 3))
+    # Main plot
+    ax = fig.add_subplot(axs[0])
+    ax.plot(w, f, "-", c="0.8", lw=lw)
+    ax.fill_between(w, f + ferr, f - ferr, color="C0", alpha=0.7)
+    ax.plot(w, f - s50, "-", label=galaxy, lw=lw)
+    ax.plot(w, m50 - s50, "-", lw=lw, label="Model")
+    for c, per in zip(colors, percs):
+        y1 = np.ma.masked_array(np.percentile(models, per, axis=0) - sky50,
+                             mask=imask)
+        y2 = np.ma.masked_array(np.percentile(models, per + 10, axis=0) - sky50,
+                             mask=imask)
+        ax.fill_between(w, y1, y2, color=c)
+    ax.set_ylabel("Normalized flux")
+    ax.xaxis.set_ticklabels([])
+    plt.legend()
+    # Residual plot
+    ax = fig.add_subplot(axs[1])
+    for c, per in zip(colors, percs):
+        y1 = 100 * (flux - np.percentile(models, per, axis=0)) / flux
+        y2 = 100 * (flux - np.percentile(models, per + 10, axis=0)) / flux
+        y1 = np.ma.masked_array(y1, mask=imask)
+        y2 = np.ma.masked_array(y2, mask=imask)
+        ax.fill_between(w, y1, y2, color=c)
+    rmse = np.std((f - m50)/flux)
+    ax.plot(w, 100 * (f - m50) / f, "-", lw=lw, c="C1",
+            label="RMSE={:.1f}\%".format(100 * rmse))
+    ax.axhline(y=0, ls="--", c="k", lw=1, zorder=1000)
+    ax.set_xlabel(r"$\lambda$ (\r{A})")
+    ax.set_ylabel("Residue (\%)")
+    ax.set_ylim(-3 * 100 * rmse, 3 * 100 * rmse)
+    plt.legend()
+    plt.subplots_adjust(left=0.065, right=0.995, hspace=0.02, top=0.99,
+                        bottom=0.11)
+    plt.savefig("{}.png".format(outfig), dpi=250)
+    plt.show()
     return
 
-def run_testdata(sampler="emcee", redo=False, sigma=300, nsteps=6000,
-                 elements=None, lltype="studt2", dlam=100):
+
+def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
-    elements = ["C", "N", "Na", "Mg", "Si", "Ca", "Ti", "Fe", "K", "Cr",
-                "Mn", "Ba", "Ni", "Co", "Eu", "Sr", "V", "Cu", "as/Fe"] if \
-        elements is None else elements
-    velscale = int(sigma / 3)
+    pbdir = os.path.join(context.home_dir, f"paintbox")
+    wdir = os.path.join(pbdir, f"dr1_sig{sigma}")
+    filenames = sorted([_ for _ in os.listdir(wdir) if
+                        _.endswith(f"sig{sigma}.fits")])
     # Prepare models for fitting
-    cvd_data_dir = "/home/kadu/Dropbox/SSPs/CvD18"
-    ssps_dir = os.path.join(cvd_data_dir, "VCJ_v8")
-    ssp_files = glob.glob(os.path.join(ssps_dir, "VCJ*.s100"))
-    rfs_dir = os.path.join(cvd_data_dir, "RFN_v3")
-    rf_files = glob.glob(os.path.join(rfs_dir, "atlas_ssp*.s100"))
-    models_dir = os.path.join(context.home_dir, "CvD18")
-    if not os.path.exists(models_dir):
-        os.mkdir(models_dir)
-    outname = "testdata_xshooter_sig{}".format(sigma)
-    wave = disp2vel(np.array([3510, 21500], dtype="object"), velscale)
-    ssp = CvD18(wave, ssp_files=ssp_files, rf_files=rf_files,
-                outdir=models_dir, outname=outname,
-                elements=elements, norm=True)
-    ssp_kin = pb.LOSVDConv(ssp, losvdpars=["Vsyst", "sigma"])
-    # Perform fitting
-    data_dir = os.path.join(context.data_dir, "test")
-    galaxies = sorted(os.listdir(data_dir))
-    wranges = ["UVB", "VIS", "NIR"]
-    # Test values
-    pssp = [0, 10, 1.5, 1.5]
-    pelements = [0] * len(elements)
-    pkin = [100, 150]
-    p0s = []
-    for galaxy in galaxies:
-        print(galaxy)
-        gal_dir = os.path.join(data_dir, galaxy)
-        fname = os.path.join(gal_dir, "{}_sig{}.fits".format(galaxy, sigma))
-        # Read tables
-        ts = [Table.read(fname, hdu=i + 1) for i in range(len(wranges))]
-        wave = np.hstack([t["wave"].data for t in ts])
-        flam = np.hstack([t["flam"].data for t in ts])
+    store = os.path.join(pbdir, "CvD18_INSPIRE_dr1.fits")
+    for filename in filenames:
+        # Read galaxy data
+        galaxy = filename.split("_")[0]
+        table = Table.read(os.path.join(wdir, filename))
+        wave = table["wave"].data
+        flux = table["flux"].data
+        fluxerr = table["fluxerr"].data
+        mask = table["mask"].data
+        wmin = wave[mask==0][0]
+        wmax =  wave[mask==0][-1]
+        # Cropping wavelenght
+        if ssps == "CvD":
+            wmin = np.maximum(wmin, 3520)
+        idx = np.where((wave >= wmin) & (wave <= wmax))[0]
+        wave = wave[idx]
+        flux = flux[idx]
+        fluxerr = fluxerr[idx]
+        mask = mask[idx]
+        sed, limits = make_paintbox_model(wave, store, sigma=sigma, nssps=nssps)
+        logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
+        priors = set_priors(logp.parnames, limits, nssps=nssps)
+        dbname = f"{galaxy}_nsteps{nsteps}.h5"
+        # Run in any directory outside Dropbox to avoid conflicts
+        tmp_db = os.path.join(os.getcwd(), dbname)
+        if os.path.exists(tmp_db):
+            os.remove(tmp_db)
+        outdb = os.path.join(wdir, dbname)
+        if not os.path.exists(outdb) or redo:
+            run_sampler(tmp_db, nsteps=nsteps)
+            shutil.move(tmp_db, outdb)
+        # Load database and make a table with summary statistics
+        reader = emcee.backends.HDFBackend(outdb)
+        tracedata = reader.get_chain(discard=int(nsteps * 0.9), flat=True,
+                                     thin=100)
+        trace = Table(tracedata, names=logp.parnames)
+        outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
+        make_table(trace, outtab)
+        if platform.node() == "kadu-Inspiron-5557":
+            plot_fitting(wave, flux, fluxerr, sed, trace,  outdb,
+                         mask=mask, galaxy=galaxy)
 
-        flamerr = np.hstack([t["flamerr"].data for t in ts])
-        mask = np.hstack([t["mask"].data.astype(bool) for t in ts])
-        # Making paintbox model
-        porder = int((wave.max() - wave.min()) / dlam)
-        poly = pb.Polynomial(wave, porder, zeroth=True, pname="poly")
-        # Making paintbox model
-        sed = pb.Resample(wave, ssp_kin) * poly
-        ppoly = [0] * (porder + 1)
-        ppoly[0] = 1.
-        # Vector for tests
-        p0 = np.array(pssp + pelements + pkin + ppoly)
-        norm = np.ma.median(np.ma.masked_array(flam, mask=np.invert(mask)))
-        flam /= norm
-        flamerr /= norm
-        if lltype == "studt2":
-            logp = pb.StudT2LogLike(flam, sed, obserr=flamerr, mask=mask)
-        elif lltype == "normal2":
-            logp = pb.Normal2LogLike(flam, sed, obserr=flamerr, mask=mask)
-        priors = make_priors(logp.parnames, ssp.limits, wranges)
-        if sampler == "emcee":
-            # Running fit
-            dbname = "{}_{}_{}.h5".format(galaxy, lltype, nsteps)
-            # Run in any directory outside Dropbox to avoid conflicts
-            tmp_db = os.path.join(os.getcwd(), dbname)
-            if os.path.exists(tmp_db):
-                os.remove(tmp_db)
-            outdb = os.path.join(gal_dir, dbname)
-            if not os.path.exists(outdb) or redo:
-                run_sampler(tmp_db, nsteps=nsteps)
-                shutil.move(tmp_db, outdb)
-            # Load database and make a table with summary statistics
-            reader = emcee.backends.HDFBackend(outdb)
-            tracedata = reader.get_chain(discard=int(0.9 * nsteps),
-                                         thin=100, flat=True)
-            trace = Table(tracedata, names=logp.parnames)
-            bestfit = np.percentile(tracedata, 50, axis=(0,))
-            outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
-            make_table(trace, outtab)
-            if platform.node() == "kadu-Inspiron-5557":
-                outimg = outdb.replace(".h5", "_fitting.png")
-                plot_fitting(wave, flam, flamerr, mask, sed, trace, outimg,
-                             bestfit=bestfit)
-        elif sampler == "dynesty":
-            dbname = "{}_{}_dynesty.pkl".format(galaxy, lltype)
-            outdb = os.path.join(gal_dir, dbname)
-            if not os.path.exists(dbname) or redo:
-                run_dynesty(logp, priors, outdb)
-            with open(outdb, "rb") as f:
-                results = pickle.load(f)
-            # samples = results.samples
+
 if __name__ == "__main__":
-    run_testdata()
+    # run_testdata()
+    run_dr1()
 

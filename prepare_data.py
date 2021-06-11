@@ -14,11 +14,12 @@ import matplotlib.pyplot as plt
 from specutils import Spectrum1D
 from scipy.ndimage.filters import gaussian_filter1d
 from spectres import spectres
+import paintbox as pb
 from paintbox.utils.disp2vel import disp2vel
 
 import context
 
-if __name__ == "__main__":
+def prepare_test_data():
     sample = "test"
     data_dir = os.path.join(context.data_dir, sample)
     galaxies = sorted(os.listdir(data_dir))
@@ -97,3 +98,53 @@ if __name__ == "__main__":
         plt.savefig(os.path.join(wdir, "{}_spectrum.png".format(galaxy)),
                     dpi=250)
         plt.show()
+
+def prepare_dr1_data(target_sigma=300):
+    sample = "combined_dr1"
+    data_dir = os.path.join(context.data_dir, sample)
+    filenames = sorted(os.listdir(data_dir))
+    galaxies = list(set([_.split("_")[0] for _ in filenames]))
+    # R = np.array([3300, 5400, 3500])
+    # obssigma = const.c.to("km/s").value / 2.355 / R
+    velscale = int(target_sigma / 3)
+    outdir = os.path.join(context.home_dir, f"paintbox/dr1_sig{target_sigma}")
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
+    for galaxy in galaxies:
+        print(galaxy)
+        output = os.path.join(outdir, f"{galaxy}_sig{target_sigma}.fits")
+        specname = f"{galaxy}_ALL_REBINNED_NORM.fits"
+        specerrname = f"{galaxy}_ALL_ERROR_REBINNED_NORM.fits"
+        specname_unnorm = f"{galaxy}_ALL_REBINNED.fits"
+        spec1d = Spectrum1D.read(os.path.join(data_dir, specname))
+        err1d = Spectrum1D.read(os.path.join(data_dir, specerrname))
+        spec1d_un = Spectrum1D.read(os.path.join(data_dir, specname_unnorm ))
+        ratio = spec1d_un.flux / spec1d.flux
+        norm = np.nanmedian(ratio.value)
+        wave = np.power(10, spec1d.spectral_axis.value)
+        flux = spec1d.flux
+        fluxerr = err1d.flux
+        mask = np.where(flux == 0, 1, 0)
+        owave = disp2vel(wave, velscale)
+        flux_rebin, fluxerr_rebin = spectres(owave, wave, flux,
+                                             spec_errs=fluxerr, fill=0,
+                                             verbose=False)
+        omask = spectres(owave, wave, mask, fill=0, verbose=False)
+        theta = np.array([1, 0, target_sigma])
+        oflux = pb.LOSVDConv(
+            pb.NonParametricModel(owave, np.atleast_2d(flux_rebin)))(theta)
+        ofluxerr = pb.LOSVDConv(
+            pb.NonParametricModel(owave, np.atleast_2d(fluxerr_rebin)))(theta)
+        omask[np.isnan(oflux)] = 1
+        ofluxerr[np.isnan(oflux)] = 0
+        oflux[np.isnan(oflux)] = 0
+        table = Table([owave, oflux, ofluxerr, omask],
+                      names=["wave", "flux", "fluxerr", "mask"])
+        hdu = fits.BinTableHDU(table)
+        hdu.header["NORM"] = (norm, "Flux normalization")
+        hdulist = fits.HDUList([fits.PrimaryHDU(), hdu])
+        hdulist.writeto(output, overwrite=True)
+
+if __name__ == "__main__":
+    # prepare_test_data()
+    prepare_dr1_data()

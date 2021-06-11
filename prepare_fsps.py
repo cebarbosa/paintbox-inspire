@@ -16,7 +16,7 @@ from tqdm import tqdm
 import context
 import fsps
 
-def make_FSPS_varydoublex(outdir, redo=False):
+def make_FSPS_varydoublex(outdir, redo=False, add_neb_emission=False):
     """ Use python-FSPS to produce models to be used with paintbox. """
     if not os.path.exists(outdir):
         os.mkdir(outdir)
@@ -27,7 +27,7 @@ def make_FSPS_varydoublex(outdir, redo=False):
                                 sfh=0, logzsol=0.0, dust_type=2, dust2=0.,
                                 add_agb_dust_model=False,
                                 add_dust_emission=False,
-                                add_neb_emission=False,
+                                add_neb_emission=add_neb_emission,
                                 nebemlineinspec=False,
                                 imf_type=2, smooth_lsf=1, sigma_smooth=100)
     wave_eff, Mvega, Msun = sp.filter_data()
@@ -86,5 +86,5 @@ def make_FSPS_varydoublex(outdir, redo=False):
 
 
 if __name__ == "__main__":
-    FSPS_dir = "/home/kadu/Dropbox/FSPS/varydoublex"
-    make_FSPS_varydoublex(FSPS_dir, redo=False)
+    FSPS_dir = "/home/kadu/Dropbox/SSPs/FSPS/varydoublex_with_lines"
+    make_FSPS_varydoublex(FSPS_dir, redo=False, add_neb_emission=True)

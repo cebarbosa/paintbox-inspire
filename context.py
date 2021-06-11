@@ -12,10 +12,14 @@ fsps_dir = "/home/kadu/repos/fsps"
 os.environ["SPS_HOME"] = fsps_dir
 
 # Add home directories in different computers
-if getpass.getuser() == "kadu":
+if platform.node() == "kadu-Inspiron-5557":
     home_dir = "/home/kadu/Dropbox/INSPIRE"
+    cvd_data_dir = "/home/kadu/Dropbox/SSPs/CvD18"
+    mp_pool_size = 4
 elif platform.node() in ["uv100", "alphacrucis", "yaci.iag.usp.br"]:
     home_dir = "/sto/home/cebarbosa/INSPIRE"
+    cvd_data_dir = None
+    mp_pool_size = 64
 
 data_dir = os.path.join(home_dir, "data")
 
@@ -62,6 +66,4 @@ txtwidth = 7.24551
 
 flam_unit = u.erg / u.cm / u.cm / u.s / u.AA
 fnu_unit = u.erg / u.s / u.cm / u.cm / u.Hz
-
-mp_pool_size = {"kadu-Inspiron-5557": 4, "yaci.iag.usp.br": 64}
 
