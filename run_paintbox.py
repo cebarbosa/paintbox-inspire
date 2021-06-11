@@ -32,6 +32,10 @@ def make_paintbox_model(wave, store, dlam=150, nssps=1,
             s = copy.deepcopy(ssp)
             s.parnames = ["{}_{}".format(_, i+1) for _ in s.parnames]
             if i == 0:
+                print(pop.wave == s.wave)
+                print(pop.wave)
+                print(s.wave)
+                input()
                 pop = p0 * s
             else:
                 pop += (p0 * s)
