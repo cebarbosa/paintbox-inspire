@@ -55,7 +55,7 @@ def set_priors(parnames, limits, vsyst=0, nssps=1):
         elif parname == "Vsyst":
             priors[parname] = stats.norm(loc=vsyst, scale=500)
         elif parname == "eta":
-            priors["eta"] = stats.uniform(loc=0.01, scale=9.99)
+            priors["eta"] = stats.uniform(loc=1, scale=10)
         elif parname == "nu":
             priors["nu"] = stats.uniform(loc=2, scale=20)
         elif parname == "sigma":
@@ -242,7 +242,8 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
     return
 
 
-def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False, fit=False):
+def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False,
+            fit=False, eta=0.1):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
@@ -264,7 +265,7 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False, fit=False):
         table = Table.read(os.path.join(wdir, filename))
         wave = table["wave"].data
         flux = table["flux"].data
-        fluxerr = table["fluxerr"].data
+        fluxerr = table["fluxerr"].data * eta
         mask = table["mask"].data.astype(np.int)
         wmin = wave[mask==0][0]
         wmax =  wave[mask==0][-1]
