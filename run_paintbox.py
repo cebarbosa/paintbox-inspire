@@ -248,7 +248,7 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False, fit=False):
     global priors
     pbdir = os.path.join(context.home_dir, f"paintbox")
     version =  f"dr1_sig{sigma}"
-    wdir = os.path.join(pbdir, version, version)
+    wdir = os.path.join(pbdir, version)
 
     filenames = sorted([_ for _ in os.listdir(wdir) if
                         _.endswith(f"sig{sigma}.fits")])
