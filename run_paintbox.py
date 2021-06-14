@@ -32,10 +32,6 @@ def make_paintbox_model(wave, store, dlam=150, nssps=1,
             s = copy.deepcopy(ssp)
             s.parnames = ["{}_{}".format(_, i+1) for _ in s.parnames]
             if i == 0:
-                print(p0.wave == s.wave)
-                print(p0.wave)
-                print(s.wave)
-                input()
                 pop = p0 * s
             else:
                 pop += (p0 * s)
@@ -59,7 +55,7 @@ def set_priors(parnames, limits, vsyst=0, nssps=1):
         elif parname == "Vsyst":
             priors[parname] = stats.norm(loc=vsyst, scale=500)
         elif parname == "eta":
-            priors["eta"] = stats.uniform(loc=1., scale=19)
+            priors["eta"] = stats.uniform(loc=0.01, scale=9.99)
         elif parname == "nu":
             priors["nu"] = stats.uniform(loc=2, scale=20)
         elif parname == "sigma":
@@ -163,7 +159,7 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
         return
     galaxy = "Observed" if galaxy is None else galaxy
     mask = np.full_like(wave, True) if mask is None else mask
-    imask = np.invert(mask)
+    pmask = mask.astype(np.bool)
     fig_width = 3.54  # inches - A&A template for 1 column
     print_pars = sed.parnames if print_pars is None else print_pars
     ssp_model = "CvD"
@@ -181,9 +177,9 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
     # Getting numpy array with trace
     tdata = np.array([trace[p].data for p in sed.parnames]).T
     # Arrays for the clean plot
-    w = np.ma.masked_array(wave, mask=imask)
-    f = np.ma.masked_array(flux, mask=imask)
-    ferr = np.ma.masked_array(fluxerr, mask=imask)
+    w = np.ma.masked_array(wave, mask=pmask)
+    f = np.ma.masked_array(flux, mask=pmask)
+    ferr = np.ma.masked_array(fluxerr, mask=pmask)
     # Defining percentiles/colors for model plots
     percs = np.linspace(5, 85, 9)
     fracs = np.array([0.2, 0.4, 0.6, 0.8, 1, 0.8, 0.6, 0.4, 0.2])
@@ -204,7 +200,7 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
         for i in tqdm(range(len(skytrace)), desc="Loading sky models"):
             skyspec[i] = sky(skytrace[i])
     sky50 = np.median(skyspec, axis=0)
-    s50 = np.ma.masked_array(sky50, mask=imask)
+    s50 = np.ma.masked_array(sky50, mask=pmask)
     # Starting plot
     fig, axs = plt.subplots(2, 1, gridspec_kw={'height_ratios': [2, 1]},
                             figsize=(2 * fig_width, 3))
@@ -216,9 +212,9 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
     ax.plot(w, m50 - s50, "-", lw=lw, label="Model")
     for c, per in zip(colors, percs):
         y1 = np.ma.masked_array(np.percentile(models, per, axis=0) - sky50,
-                             mask=imask)
+                                mask=pmask)
         y2 = np.ma.masked_array(np.percentile(models, per + 10, axis=0) - sky50,
-                             mask=imask)
+                                mask=pmask)
         ax.fill_between(w, y1, y2, color=c)
     ax.set_ylabel("Normalized flux")
     ax.xaxis.set_ticklabels([])
@@ -228,8 +224,8 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
     for c, per in zip(colors, percs):
         y1 = 100 * (flux - np.percentile(models, per, axis=0)) / flux
         y2 = 100 * (flux - np.percentile(models, per + 10, axis=0)) / flux
-        y1 = np.ma.masked_array(y1, mask=imask)
-        y2 = np.ma.masked_array(y2, mask=imask)
+        y1 = np.ma.masked_array(y1, mask=pmask)
+        y2 = np.ma.masked_array(y2, mask=pmask)
         ax.fill_between(w, y1, y2, color=c)
     rmse = np.std((f - m50)/flux)
     ax.plot(w, 100 * (f - m50) / f, "-", lw=lw, c="C1",
@@ -246,12 +242,14 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
     return
 
 
-def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
+def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False, fit=False):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
     pbdir = os.path.join(context.home_dir, f"paintbox")
-    wdir = os.path.join(pbdir, f"dr1_sig{sigma}")
+    version =  f"dr1_sig{sigma}"
+    wdir = os.path.join(pbdir, version, version)
+
     filenames = sorted([_ for _ in os.listdir(wdir) if
                         _.endswith(f"sig{sigma}.fits")])
     # Prepare models for fitting
@@ -259,11 +257,15 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
     for filename in filenames:
         # Read galaxy data
         galaxy = filename.split("_")[0]
+        dbname = f"{galaxy}_nsteps{nsteps}.h5"
+        outdb = os.path.join(wdir, dbname)
+        if not os.path.exists(outdb) and fit is False:
+            continue
         table = Table.read(os.path.join(wdir, filename))
         wave = table["wave"].data
         flux = table["flux"].data
         fluxerr = table["fluxerr"].data
-        mask = table["mask"].data
+        mask = table["mask"].data.astype(np.int)
         wmin = wave[mask==0][0]
         wmax =  wave[mask==0][-1]
         # Cropping wavelenght
@@ -277,7 +279,6 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
         sed, limits = make_paintbox_model(wave, store, sigma=sigma, nssps=nssps)
         logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
         priors = set_priors(logp.parnames, limits, nssps=nssps)
-        dbname = f"{galaxy}_nsteps{nsteps}.h5"
         # Run in any directory outside Dropbox to avoid conflicts
         tmp_db = os.path.join(os.getcwd(), dbname)
         if os.path.exists(tmp_db):
@@ -288,9 +289,13 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
             shutil.move(tmp_db, outdb)
         # Load database and make a table with summary statistics
         reader = emcee.backends.HDFBackend(outdb)
-        tracedata = reader.get_chain(discard=int(nsteps * 0.9), flat=True,
+        tracedata = reader.get_chain(discard=int(nsteps * 0.94), flat=True,
                                      thin=100)
         trace = Table(tracedata, names=logp.parnames)
+        if nssps > 1:
+            ssp_pars = list(limits.keys())
+            wtrace = weighted_traces(ssp_pars, trace, nssps)
+            trace = hstack([trace, wtrace])
         outtab = os.path.join(outdb.replace(".h5", "_results.fits"))
         make_table(trace, outtab)
         if platform.node() == "kadu-Inspiron-5557":
@@ -299,6 +304,7 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False):
 
 
 if __name__ == "__main__":
+    fit = False if platform.node() == "kadu-Inspiron-5557" else True
     # run_testdata()
-    run_dr1()
+    run_dr1(fit=fit)
 
