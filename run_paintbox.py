@@ -243,7 +243,7 @@ def plot_fitting(wave, flux, fluxerr, sed, trace, db, redo=True, sky=None,
 
 
 def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False,
-            fit=False, eta=0.1):
+            fit=False, eta=0.1, lltype="studt2"):
     """ Run paintbox on test galaxies. """
     global logp
     global priors
@@ -258,7 +258,7 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False,
     for filename in filenames:
         # Read galaxy data
         galaxy = filename.split("_")[0]
-        dbname = f"{galaxy}_nsteps{nsteps}.h5"
+        dbname = f"{galaxy}_{lltype}_nsteps{nsteps}.h5"
         outdb = os.path.join(wdir, dbname)
         if not os.path.exists(outdb) and fit is False:
             continue
@@ -278,7 +278,10 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False,
         fluxerr = fluxerr[idx]
         mask = mask[idx]
         sed, limits = make_paintbox_model(wave, store, sigma=sigma, nssps=nssps)
-        logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
+        if lltype == "normal2":
+            logp = pb.Normal2LogLike(flux, sed, obserr=fluxerr, mask=mask)
+        elif lltype == "studt2":
+            logp = pb.StudT2LogLike(flux, sed, obserr=fluxerr, mask=mask)
         priors = set_priors(logp.parnames, limits, nssps=nssps)
         # Run in any directory outside Dropbox to avoid conflicts
         tmp_db = os.path.join(os.getcwd(), dbname)
