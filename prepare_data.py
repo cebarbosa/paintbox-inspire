@@ -99,6 +99,47 @@ def prepare_test_data():
                     dpi=250)
         plt.show()
 
+def review_masks(target_sigma=300):
+    wdir = os.path.join(context.home_dir, f"paintbox/dr1_sig{target_sigma}")
+    filenames = [_ for _ in os.listdir(wdir) if
+                 _.endswith(f"sig{target_sigma}.fits")]
+    plt.figure(figsize=(20, 5))
+    plt.ion()
+    plt.show()
+    for filename in filenames:
+        galaxy = filename.split("_")[0]
+        table = Table.read(os.path.join(wdir, filename))
+        norm = fits.getval(os.path.join(wdir, filename), "NORM", ext=1)
+        wave = table["wave"].data
+        flux = table["flux"].data
+        mask = table["mask"].data
+        fluxerr = table["fluxerr"].data
+        while True:
+            plt.clf()
+            flux_plot = flux
+            flux_plot[mask==1] = np.nan
+            plt.plot(wave, flux_plot)
+            plt.title(galaxy)
+            plt.tight_layout()
+            plt.draw()
+            plt.pause(0.01)
+            process = input("Update mask? (N/y): ")
+            if process.lower() in ["", "n", "no"]:
+                break
+            plt.waitforbuttonpress()
+            pts = np.asarray(plt.ginput(2, timeout=-1))
+            wmin = pts[:, 0].min()
+            wmax = pts[:, 0].max()
+            idx = np.where((wave >= wmin) & (wave <= wmax))
+            mask[idx] = 1
+        table = Table([wave, flux, fluxerr, mask],
+                      names=["wave", "flux", "fluxerr", "mask"])
+        hdu = fits.BinTableHDU(table)
+        hdu.header["NORM"] = (norm, "Flux normalization")
+        hdulist = fits.HDUList([fits.PrimaryHDU(), hdu])
+        hdulist.writeto(os.path.join(wdir, filename), overwrite=True)
+
+
 def prepare_dr1_data(target_sigma=300):
     sample = "combined_dr1"
     data_dir = os.path.join(context.data_dir, sample)
@@ -147,4 +188,5 @@ def prepare_dr1_data(target_sigma=300):
 
 if __name__ == "__main__":
     # prepare_test_data()
-    prepare_dr1_data()
+    # prepare_dr1_data()
+    review_masks()

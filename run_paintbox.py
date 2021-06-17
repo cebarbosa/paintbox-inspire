@@ -69,7 +69,7 @@ def set_priors(parnames, limits, vsyst=0, nssps=1):
                 a, b = (0 - mu) / sd, (np.infty - mu) / sd
                 priors[parname] = stats.truncnorm(a, b, mu, sd)
             else:
-                priors[parname] = stats.norm(0, 0.05)
+                priors[parname] = stats.norm(0, 0.1)
         else:
             raise ValueError(f"Parameter without prior: {parname}")
     return priors
