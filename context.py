@@ -14,7 +14,9 @@ os.environ["SPS_HOME"] = fsps_dir
 # Add home directories in different computers
 if platform.node() == "kadu-Inspiron-5557":
     home_dir = "/home/kadu/Dropbox/INSPIRE"
-    cvd_data_dir = "/home/kadu/Dropbox/SSPs/CvD18"
+    ssps_dir = "/home/kadu/Dropbox/SSPs"
+    cvd_data_dir = os.path.join(ssps_dir, "CvD18")
+    emiles_dir = os.path.join(ssps_dir, "EMILES_BASTI_INTERPOLATED")
     mp_pool_size = 4
 elif platform.node() in ["uv100", "alphacrucis", "yaci.iag.usp.br"]:
     home_dir = "/sto/home/cebarbosa/INSPIRE"

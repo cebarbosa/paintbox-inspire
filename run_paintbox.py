@@ -306,7 +306,6 @@ def run_dr1(sigma=300, ssps="CvD", nssps=2, nsteps=6000, redo=False,
             plot_fitting(wave, flux, fluxerr, sed, trace,  outdb,
                          mask=mask, galaxy=galaxy)
 
-
 if __name__ == "__main__":
     fit = False if platform.node() == "kadu-Inspiron-5557" else True
     # run_testdata()
